@@ -21,6 +21,7 @@ const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024
 app.use("/api/auth",rateLimit({windowMs:15*60*1000,max:30}));
 app.use("/api",rateLimit({windowMs:60*1000,max:180}));
 app.use(express.static(path.join(__dirname,"public")));
+app.get("/",(req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 app.get("/api/health",(req,res)=>res.json({ok:true}));
 
 const sockets=new Map(), rooms=new Map();
