@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      DATABASE_URL: postgresql://pastel:pastel@db:5432/pastelchat
+      DATABASE_SSL: "false"
+      JWT_SECRET: change-this-in-production
+      FRONTEND_ORIGIN: http://localhost:3000
+    depends_on: [db]
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pastelchat
+      POSTGRES_USER: pastel
+      POSTGRES_PASSWORD: pastel
+    volumes: [pgdata:/var/lib/postgresql/data]
+volumes:
+  pgdata:
