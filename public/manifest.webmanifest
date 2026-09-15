@@ -1,0 +1,12 @@
+{
+  "name": "PastelChat",
+  "short_name": "PastelChat",
+  "description": "Seu cantinho para conversar com amigos.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f1e9",
+  "theme_color": "#28233a",
+  "orientation": "portrait-primary",
+  "lang": "pt-BR",
+  "icons": []
+}
