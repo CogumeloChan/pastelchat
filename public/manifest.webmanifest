@@ -8,5 +8,12 @@
   "theme_color": "#28233a",
   "orientation": "portrait-primary",
   "lang": "pt-BR",
-  "icons": []
+  "icons": [
+    {
+      "src": "/pastelchat-icon.png",
+      "sizes": "1536x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
 }
