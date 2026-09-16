@@ -292,21 +292,38 @@ function updateCallStatus(){
   const connected=[...pcs.values()].filter(p=>p.connectionState==='connected').length,total=pcs.size;
   $('#callStatus').textContent=connected?`Ligação ativa · ${connected} conectado${connected>1?'s':''}`:total?'Conectando…':'Aguardando participantes…';
 }
+/*
+  WebRTC media layout is fixed for the lifetime of each RTCPeerConnection:
+  m-line 0 = audio, m-line 1 = camera, m-line 2 = screen.
+  Camera/screen are switched with replaceTrack() only; we do NOT renegotiate
+  when toggling them. This prevents SDP m-line reordering/glare.
+*/
 async function renegotiate(name,p){
-  if(!p||p.signalingState!=='stable'||p.__makingOffer)return;
-  try{p.__makingOffer=true;const offer=await p.createOffer();await p.setLocalDescription(offer);ws?.send(JSON.stringify({type:'call-offer',target:name,offer:p.localDescription,group:room,renegotiate:true}));}
-  catch(e){console.warn('renegotiate',name,e)}finally{p.__makingOffer=false}
+  if(!p||p.signalingState!=='stable'||p.__makingOffer||p.__skipNegotiation)return;
+  try{
+    p.__makingOffer=true;
+    const offer=await p.createOffer();
+    await p.setLocalDescription(offer);
+    ws?.send(JSON.stringify({type:'call-offer',target:name,offer:p.localDescription,group:room,renegotiate:true}));
+  }catch(e){console.warn('renegotiate',name,e)}
+  finally{p.__makingOffer=false}
 }
 function createPeer(peerName){
   const old=pcs.get(peerName);if(old&&old.connectionState!=='closed'&&old.connectionState!=='failed')return old;
-  const p=new RTCPeerConnection(iceConfig());p.__polite=String(me.username)>String(peerName);p.__makingOffer=false;p.__ignoreOffer=false;p.__retry=0;p.__skipNegotiation=false;
+  const p=new RTCPeerConnection(iceConfig());
+  p.__polite=String(me.username)>String(peerName);
+  p.__makingOffer=false;p.__ignoreOffer=false;p.__retry=0;p.__skipNegotiation=true;
   pcs.set(peerName,p);
+
+  // IMPORTANT: never add/remove transceivers after this point.
   p.__audioTr=p.addTransceiver('audio',{direction:'sendrecv'});
   p.__camTr=p.addTransceiver('video',{direction:'sendrecv'});
   p.__screenTr=p.addTransceiver('video',{direction:'sendrecv'});
+
   if(localStream?.getAudioTracks()[0])p.__audioTr.sender.replaceTrack(localStream.getAudioTracks()[0]);
   p.__camTr.sender.replaceTrack(localStream?.getVideoTracks().find(t=>t.enabled&&t.readyState==='live')||null);
   p.__screenTr.sender.replaceTrack(screenStream?.getVideoTracks()[0]||null);
+
   p.onicecandidate=e=>{if(e.candidate)ws?.send(JSON.stringify({type:'ice-candidate',target:peerName,candidate:e.candidate}))};
   p.onnegotiationneeded=()=>{if(!p.__skipNegotiation)renegotiate(peerName,p)};
   p.ontrack=e=>{
@@ -318,20 +335,39 @@ function createPeer(peerName){
   };
   p.onconnectionstatechange=()=>{
     updateCallStatus();
-    if(p.connectionState==='connected'){p.__retry=0;clearTimeout(callTimer);sendMediaState(peerName);const r=makeRemote(peerName);tryPlayRemote(r)}
+    if(p.connectionState==='connected'){
+      p.__retry=0;clearTimeout(callTimer);sendMediaState(peerName);
+      const r=makeRemote(peerName);tryPlayRemote(r)
+    }
     if(p.connectionState==='failed'){
-      if(p.__retry<2){p.__retry++;try{p.restartIce()}catch{};setTimeout(()=>renegotiate(peerName,p),700)}
-      else {toast('Não foi possível conectar com @'+peerName+'.');pcs.delete(peerName);p.close();document.getElementById('wrap-'+peerName)?.remove();updateCallStatus()}
+      if(p.__retry<2){
+        p.__retry++;
+        try{p.restartIce()}catch{}
+        setTimeout(()=>renegotiate(peerName,p),700)
+      }else{
+        toast('Não foi possível conectar com @'+peerName+'.');
+        pcs.delete(peerName);p.close();document.getElementById('wrap-'+peerName)?.remove();updateCallStatus()
+      }
     }
     if(p.connectionState==='closed'){pcs.delete(peerName);document.getElementById('wrap-'+peerName)?.remove();updateCallStatus()}
   };
-  p.oniceconnectionstatechange=()=>{if(p.iceConnectionState==='failed'){try{p.restartIce()}catch{};setTimeout(()=>renegotiate(peerName,p),500)}};
+  p.oniceconnectionstatechange=()=>{
+    if(p.iceConnectionState==='failed'){
+      try{p.restartIce()}catch{}
+      setTimeout(()=>renegotiate(peerName,p),500)
+    }
+  };
   return p;
 }
 async function makeInitialOffer(target,p){
   if(p.signalingState!=='stable')return;
-  try{p.__makingOffer=true;const offer=await p.createOffer();await p.setLocalDescription(offer);ws?.send(JSON.stringify({type:'call-offer',target,offer:p.localDescription,group:room,initial:true}));}
-  catch(e){console.error(e);toast('Falha ao iniciar a chamada.')}finally{p.__makingOffer=false}
+  try{
+    p.__makingOffer=true;
+    const offer=await p.createOffer();
+    await p.setLocalDescription(offer);
+    ws?.send(JSON.stringify({type:'call-offer',target,offer:p.localDescription,group:room,initial:true}));
+  }catch(e){console.error(e);toast('Falha ao iniciar a chamada.')}
+  finally{p.__makingOffer=false}
 }
 async function startCall(){
   if(!selected)return toast('Escolha um amigo ou grupo.');if(callActive)return toast('Você já está em uma ligação.');
@@ -339,7 +375,7 @@ async function startCall(){
   try{
     localStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});$('#localPreview').srcObject=localStream;
     const targets=currentCallTargets();if(!targets.length)throw new Error('Nenhum participante disponível.');
-    for(const target of targets){const p=createPeer(target);await makeInitialOffer(target,p)}updateCallStatus();clearTimeout(callTimer);callTimer=setTimeout(()=>{if(callActive&&!([...pcs.values()].some(p=>p.connectionState==='connected'))){toast('A chamada não conseguiu conectar.');endCall(true)}},20000);
+    for(const target of targets){const p=createPeer(target);await makeInitialOffer(target,p);p.__skipNegotiation=false}updateCallStatus();clearTimeout(callTimer);callTimer=setTimeout(()=>{if(callActive&&!([...pcs.values()].some(p=>p.connectionState==='connected'))){toast('A chamada não conseguiu conectar.');endCall(true)}},20000);
   }catch(e){console.error(e);toast('Não foi possível iniciar: '+e.message);endCall(true)}
 }
 async function handleSignal(m){
@@ -356,10 +392,20 @@ async function handleSignal(m){
         localStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});$('#localPreview').srcObject=localStream;
         if(!p.__audioTr)p=createPeer(m.from);
       }
-      p.__skipNegotiation=true;if(p.signalingState!=='stable')await p.setLocalDescription({type:'rollback'});
-      await p.setRemoteDescription(m.offer);p.__skipNegotiation=false;await flushIce(m.from,p);
+      p.__skipNegotiation=true;
+      if(p.signalingState!=='stable')await p.setLocalDescription({type:'rollback'});
+      await p.setRemoteDescription(m.offer);
+      await flushIce(m.from,p);
       if(localStream?.getAudioTracks()[0])await p.__audioTr.sender.replaceTrack(localStream.getAudioTracks()[0]);
-      const ans=await p.createAnswer();await p.setLocalDescription(ans);ws?.send(JSON.stringify({type:'call-answer',target:m.from,answer:p.localDescription,group:m.group||room}));sendMediaState(m.from);updateCallStatus();return;
+      if(localStream?.getVideoTracks().some(t=>t.enabled&&t.readyState==='live'))
+        await p.__camTr.sender.replaceTrack(localStream.getVideoTracks().find(t=>t.enabled&&t.readyState==='live'));
+      if(screenStream?.getVideoTracks()[0])
+        await p.__screenTr.sender.replaceTrack(screenStream.getVideoTracks()[0]);
+      const ans=await p.createAnswer();
+      await p.setLocalDescription(ans);
+      ws?.send(JSON.stringify({type:'call-answer',target:m.from,answer:p.localDescription,group:m.group||room}));
+      p.__skipNegotiation=false;
+      sendMediaState(m.from);updateCallStatus();return;
     }
     if(m.type==='call-answer'){
       const p=pcs.get(m.from);if(!p)return;if(p.signalingState==='have-local-offer'){await p.setRemoteDescription(m.answer);await flushIce(m.from,p);sendMediaState(m.from);updateCallStatus();const r=makeRemote(m.from);tryPlayRemote(r)}return;
@@ -372,7 +418,7 @@ $('#camBtn').onclick=async()=>{
   if(!pcs.size)return toast('A ligação ainda não está conectada.');
   try{let track=localStream?.getVideoTracks()[0];if(!track){const v=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720},facingMode:'user'}});track=v.getVideoTracks()[0];localStream.addTrack(track)}
     track.enabled=!track.enabled;$('#localPreview').srcObject=localStream;$('#localPreview').style.display=track.enabled?'block':'none';
-    for(const [name,p] of pcs){await p.__camTr.sender.replaceTrack(track.enabled?track:null);sendMediaState(name);await renegotiate(name,p)}
+    for(const [name,p] of pcs){await p.__camTr.sender.replaceTrack(track.enabled?track:null);sendMediaState(name)}
     $('#camBtn').textContent=track.enabled?'📹':'📷';$('#camBtn').classList.toggle('cam-on',track.enabled);
   }catch(e){toast('Não foi possível acessar a câmera: '+e.message)}
 };
@@ -380,11 +426,11 @@ $('#screenBtn').onclick=async()=>{
   if(!pcs.size)return toast('A ligação ainda não está conectada.');
   try{if(screenStream){await stopScreen();return}if(!navigator.mediaDevices?.getDisplayMedia)throw new Error('Seu navegador não permite compartilhamento de tela.');
     screenStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:30}},audio:false});const track=screenStream.getVideoTracks()[0];
-    for(const [name,p] of pcs){await p.__screenTr.sender.replaceTrack(track);sendMediaState(name);await renegotiate(name,p)}
+    for(const [name,p] of pcs){await p.__screenTr.sender.replaceTrack(track);sendMediaState(name)}
     track.onended=()=>stopScreen();$('#callStatus').textContent='Tela compartilhada 🖥️';
   }catch(e){toast(e.message||'Compartilhamento cancelado ou bloqueado pelo navegador.')}
 };
-async function stopScreen(){if(!screenStream)return;screenStream.getTracks().forEach(t=>t.stop());screenStream=null;for(const [name,p] of pcs){await p.__screenTr.sender.replaceTrack(null);sendMediaState(name);await renegotiate(name,p)}$('#callStatus').textContent='Ligação ativa'}
+async function stopScreen(){if(!screenStream)return;screenStream.getTracks().forEach(t=>t.stop());screenStream=null;for(const [name,p] of pcs){await p.__screenTr.sender.replaceTrack(null);sendMediaState(name)}$('#callStatus').textContent='Ligação ativa'}
 function showMini(){if(!callActive)return;$('#callScreen').classList.add('hidden');$('#callMini').style.display='block';$('#miniVideo').srcObject=localStream||null}
 function showCall(){if(!callActive)return;$('#callMini').style.display='none';$('#callScreen').classList.remove('hidden');document.querySelectorAll('.remote-audio,.remote,.remote-screen').forEach(v=>v.play?.().catch(()=>{}))}
 $('#callBackBtn').onclick=()=>{showMini();page('chat')};$('#callMini').onclick=showCall;
