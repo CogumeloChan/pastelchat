@@ -26,7 +26,7 @@ app.get("/api/health",(req,res)=>res.json({ok:true}));
 app.get("/api/rtc-config",(req,res)=>{const iceServers=[{urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]}];if(process.env.TURN_URL&&process.env.TURN_USERNAME&&process.env.TURN_CREDENTIAL)iceServers.push({urls:process.env.TURN_URL.split(',').map(x=>x.trim()).filter(Boolean),username:process.env.TURN_USERNAME,credential:process.env.TURN_CREDENTIAL});res.json({iceServers})});
 
 
-const sockets=new Map(), rooms=new Map(), callRooms=new Map();
+const sockets=new Map(), rooms=new Map();
 const clean=u=>String(u||"").trim().toLowerCase().replace(/^@/,"");
 const id=()=>crypto.randomUUID();
 const send=(ws,o)=>ws?.readyState===1&&ws.send(JSON.stringify(o));
@@ -121,19 +121,17 @@ app.post("/api/upload-image",upload.single("image"),async(req,res)=>{const a=aut
 app.get("/api/images/:id",async(req,res)=>{const r=await pool.query("SELECT mime_type,data FROM images WHERE id=$1",[req.params.id]);if(!r.rows[0])return res.status(404).end();res.setHeader("Content-Type",r.rows[0].mime_type);res.setHeader("Cache-Control","public,max-age=31536000,immutable");res.end(r.rows[0].data)});
 
 wss.on("connection",ws=>{
- ws.id=id();ws.username=null;ws.room=null;ws.callRoom=null;
+ ws.id=id();ws.username=null;ws.room=null;
  ws.on("message",async raw=>{
   let m;try{m=JSON.parse(raw)}catch{return}
-  if(m.type==="auth"){try{const a=jwt.verify(m.token,JWT_SECRET);const r=await pool.query("SELECT username FROM users WHERE id=$1",[a.id]);if(!r.rows[0])throw 0;ws.username=r.rows[0].username;sockets.set(ws.username,ws);send(ws,{type:"ready",username:ws.username})}catch{send(ws,{type:"error",message:"Sessão inválida."})}return}
+  if(m.type==="auth"){try{const a=jwt.verify(m.token,JWT_SECRET);const r=await pool.query("SELECT username FROM users WHERE id=$1",[a.id]);if(!r.rows[0])throw 0;ws.username=r.rows[0].username;sockets.set(ws.username,ws);send(ws,{type:"ready",username:ws.username});broadcast({type:"presence",username:ws.username,online:true})}catch{send(ws,{type:"error",message:"Sessão inválida."})}return}
   if(!ws.username)return;
   if(m.type==="join"){if(ws.room)rooms.get(ws.room)?.delete(ws);ws.room=String(m.room||"geral").slice(0,100);if(!rooms.has(ws.room))rooms.set(ws.room,new Set);rooms.get(ws.room).add(ws);return}
   if(m.type==="mark-read"){const room=String(m.room||"").slice(0,100);if(room){const r=await pool.query("SELECT id FROM users WHERE username=$1",[ws.username]);if(r.rows[0])await pool.query(`INSERT INTO read_receipts(user_id,room,last_read_at) VALUES($1,$2,NOW()) ON CONFLICT(user_id,room) DO UPDATE SET last_read_at=EXCLUDED.last_read_at`,[r.rows[0].id,room])}return}
   if(m.type==="room-chat"){const text=String(m.text||"").trim().slice(0,3000);if(!text||!ws.room)return;const r=await pool.query("SELECT id FROM users WHERE username=$1",[ws.username]);const sender=(await pool.query("SELECT username,display_name,description,name_color,avatar_image_id FROM users WHERE username=$1",[ws.username])).rows[0];const item={id:id(),room:ws.room,username:ws.username,displayName:sender?.display_name||ws.username,description:sender?.description||"",nameColor:sender?.name_color||"#d44e82",avatarId:sender?.avatar_image_id||null,text,time:new Date().toISOString()};await pool.query("INSERT INTO messages(id,room,user_id,text) VALUES($1,$2,$3,$4)",[item.id,ws.room,r.rows[0].id,text]);for(const c of rooms.get(ws.room)||[])send(c,{type:"chat",...item});await notifyUnread(ws.room,ws.username,item)}
   if(m.type==="room-image"){if(!ws.room||!m.imageId)return;const r=await pool.query("SELECT id FROM users WHERE username=$1",[ws.username]);const sender=(await pool.query("SELECT username,display_name,description,name_color,avatar_image_id FROM users WHERE username=$1",[ws.username])).rows[0];const item={id:id(),room:ws.room,username:ws.username,displayName:sender?.display_name||ws.username,description:sender?.description||"",nameColor:sender?.name_color||"#d44e82",avatarId:sender?.avatar_image_id||null,text:"",imageId:m.imageId,time:new Date().toISOString()};await pool.query("INSERT INTO messages(id,room,user_id,text,image_id) VALUES($1,$2,$3,$4,$5)",[item.id,ws.room,r.rows[0].id,"[imagem]",m.imageId]);for(const c of rooms.get(ws.room)||[])send(c,{type:"chat",...item});await notifyUnread(ws.room,ws.username,item);return}
-  if(m.type==="call-join"){const cr=String(m.room||"").slice(0,100);if(!cr)return;if(!callRooms.has(cr))callRooms.set(cr,new Set());callRooms.get(cr).add(ws.username);ws.callRoom=cr;const participants=[...callRooms.get(cr)];for(const username of participants){const peer=sockets.get(username);if(peer)send(peer,{type:"call-participants",room:cr,participants})}return}
-  if(m.type==="call-leave"){const cr=String(m.room||ws.callRoom||"").slice(0,100);if(cr&&callRooms.has(cr)){callRooms.get(cr).delete(ws.username);for(const username of callRooms.get(cr)){const peer=sockets.get(username);if(peer)send(peer,{type:"call-peer-left",room:cr,username:ws.username})}if(!callRooms.get(cr).size)callRooms.delete(cr)}if(ws.callRoom===cr)ws.callRoom=null;return}
-  if(["call-invite","call-offer","call-answer","ice-candidate","call-end","call-renegotiate","call-media"].includes(m.type)){const peer=sockets.get(clean(m.target));if(peer)send(peer,{...m,from:ws.username})}
+  if(["call-offer","call-answer","ice-candidate","call-end","call-renegotiate","call-media"].includes(m.type)){const peer=sockets.get(clean(m.target));if(peer)send(peer,{...m,from:ws.username})}
  });
- ws.on("close",()=>{if(ws.username&&sockets.get(ws.username)===ws)sockets.delete(ws.username);if(ws.room)rooms.get(ws.room)?.delete(ws);if(ws.callRoom&&callRooms.has(ws.callRoom)){const cr=ws.callRoom;callRooms.get(cr).delete(ws.username);for(const username of callRooms.get(cr)){const peer=sockets.get(username);if(peer)send(peer,{type:"call-peer-left",room:cr,username:ws.username})}if(!callRooms.get(cr).size)callRooms.delete(cr)}});
+ ws.on("close",()=>{if(ws.username&&sockets.get(ws.username)===ws){sockets.delete(ws.username);broadcast({type:"presence",username:ws.username,online:false})}if(ws.room)rooms.get(ws.room)?.delete(ws)});
 });
 initDB().then(()=>server.listen(PORT,()=>console.log(`PastelChat production on :${PORT}`))).catch(e=>{console.error(e);process.exit(1)});
