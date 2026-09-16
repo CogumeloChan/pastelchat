@@ -134,6 +134,27 @@ body{background:radial-gradient(circle at 20% 15%,#70418d 0,transparent 32%),rad
   .mobile-friends-page .empty{color:#d7bce3}
   #settingsPage{height:calc(100dvh - 64px - env(safe-area-inset-top));overflow:auto;background:linear-gradient(180deg,#351b45,#2d173b);color:#fff}
 }
+
+/* V15 — correção definitiva da navegação mobile */
+@media (max-width: 820px) and (pointer: coarse), (max-width: 600px){
+  #mobileNav.mobile-nav{
+    display:flex!important;
+    visibility:visible!important;
+    opacity:1!important;
+    position:fixed!important;
+    left:0!important; right:0!important; bottom:0!important;
+    z-index:500!important;
+  }
+  #mobileNav.mobile-nav button{
+    display:flex!important;
+    visibility:visible!important;
+    opacity:1!important;
+  }
+  .main{padding-bottom:calc(68px + env(safe-area-inset-bottom))!important}
+  .mobile-friends-page,.mobile-conversations-page,#settingsPage{
+    padding-bottom:calc(85px + env(safe-area-inset-bottom))!important;
+  }
+}
 </style></head><body>
 <section id="login" class="login"><div class="login-card"><h1>✦ PastelChat</h1><p>Seu cantinho para conversar com amigos.</p><div class="tabs"><button id="loginTab" class="sel">Entrar</button><button id="registerTab">Criar conta</button></div><input id="authName" class="hidden" placeholder="Nome de exibição"><input id="authUser" placeholder="username"><input id="authPass" type="password" placeholder="senha (8+ caracteres)"><button id="authBtn" class="primary">Entrar</button><div id="authError" class="muted"></div></div></section>
 <div id="app" class="app hidden"><aside class="sidebar"><div class="brand"><img class="brand-logo" src="/pastelchat-icon.png" alt="PastelChat"><span>pastelchat</span></div><div class="vhs-label">✦ CONVERSAS ✦</div><div class="side-section"><div class="side-heading"><span>Amigos</span><button id="addBtn" class="section-plus" title="Adicionar amigo">＋</button></div><div id="miniFriends" class="contact-list"></div></div><div class="side-section groups-section"><div class="side-heading"><span>Grupos</span><button id="createGroupBtn" class="section-plus" title="Criar grupo">＋</button></div><div id="miniGroups" class="contact-list"></div></div><button id="profileMeBtn" class="me" type="button"><div id="meAvatar" class="avatar">?</div><div><b id="meName">...</b><small>@perfil</small></div><span class="me-arrow">⚙</span></button></aside>
